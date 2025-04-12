@@ -28,28 +28,65 @@ TIMESTAMP=$(date "+%Y-%m-%d_%H-%M-%S")
 # Read the folders you want to sync, from .folders.json
 FOLDERS=$(jq -r '.folders[]' .folders.json)
 
+CHECKSUM_FILE=./last-checksums.json
+
+#Check if the checksum file exists
+if [ ! -f "$CHECKSUM_FILE" ] || ! jq -e . "$CHECKSUM_FILE" > /dev/null 2>&1; then
+  echo "{}" > "$CHECKSUM_FILE"
+fi
+
+
+generate_folder_checksum()
+{
+  local folder="$1"
+  find "$folder" -type f \
+    -not -path "*/node_modules/*" \
+    -not -path "*/.git/*" \
+    -not -path "*/dist/*" \
+    -not -path "*/build/*" \
+    -exec shasum {} \; \
+    | shasum \
+    | cut -d ' ' -f1 
+}
+
+perform_backup() 
+{
+  local folder="$1"
+  local folder_expanded=$(eval echo "$folder")
+  local basename=$(basename "$folder_expanded")
+  local archive_name="${basename}-backup-${TIMESTAMP}.tar.gz"
+
+  #echo "Compressing $folder → $archive_name..."
+  tar --exclude='node_modules' \
+      --exclude='.git' \
+      --exclude='dist' \
+      --exclude='build' \
+      -czf "$archive_name" \
+      -C "$(dirname "$folder_expanded")" "$basename"
+
+  #echo "Compression finished, sending to Proton Drive..."
+  rsync -av "$archive_name" "$DEST_DIR/"
+
+  rm "$archive_name"
+  #echo "Backup completed : $basename"
+}
+
 for FOLDER in $FOLDERS; do
-  FOLDER_EXPANDED=$(eval echo "$FOLDERS")
-
+  FOLDER_EXPANDED=$(eval echo "$FOLDER")
   if [ -d "$FOLDER_EXPANDED" ]; then
-    BASENAME=$(basename "$FOLDER_EXPANDED")
-    ARCHIVE_NAME="${BASENAME}-backup-${TIMESTAMP}.tar.gz"
+    CHECKSUM=$(generate_folder_checksum "$FOLDER_EXPANDED")
+    OLD_SUM=$(jq -r --arg path "$FOLDER_EXPANDED" '.[$path] // empty' "$CHECKSUM_FILE")
 
-    echo "Compressing $FOLDER -> $ARCHIVE_NAME..." 
-    tar --exclude='node_modules' \
-            --exclude='.git' \
-            --exclude='dist' \
-            --exclude='build' \
-            -czf "$ARCHIVE_NAME" \
-            -C "$(dirname "$FOLDER_EXPANDED")" "$BASENAME" 
-
-    echo "Compression finished, sending to Proton Drive"
-    rsync -av "$ARCHIVE_NAME" "$DEST_DIR/"
-
-    rm "$ARCHIVE_NAME"
-    echo "Backup completed : $BASENAME"
+    if [ "$CHECKSUM" != "$OLD_SUM" ]; then
+      echo "Running backup for $FOLDER..."
+      perform_backup "$FOLDER"
+      jq --arg path "$FOLDER_EXPANDED" --arg sum "$CHECKSUM" \
+        '. + {($path): $sum}' "$CHECKSUM_FILE" > tmp.json && mv tmp.json "$CHECKSUM_FILE"
+    else
+      echo "$FOLDER already uptodate → skipping backup."
+    fi
   else
-    echo "Error: Folder not found : $FOLDERS"
+    echo "Folder not found: $FOLDER"
   fi
 done
 
