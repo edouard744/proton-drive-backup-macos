@@ -18,7 +18,7 @@ Here’s the current roadmap:
 
 - [x] Back up all folders defined in the config files and send them to the cloud folder
 - [x] Skip the folders that haven't changed since the last backup
-- [ ] Add a log file for backup history
+- [x] Add a log file for backup history
 - [ ] Set up automated periodic backups
 
 ---
